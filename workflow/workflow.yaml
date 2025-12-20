@@ -1,0 +1,57 @@
+kind: workflow
+trigger:
+  kind: OnConversationStart
+  id: trigger_wf
+  actions:
+    - kind: InvokeAzureAgent
+      id: player
+      conversationId: =System.ConversationId
+      agent:
+        name: player
+        input:
+          messages: =Local.LastMessage
+        output:
+          autoSend: true
+          messages: Local.LastMessage
+      input:
+        messages: =Local.LastMessage
+      output:
+        messages: Local.LastMessage
+    - kind: InvokeAzureAgent
+      id: gameMaster
+      conversationId: =System.ConversationId
+      agent:
+        name: gameMaster
+      input:
+        messages: =Local.LastMessage
+      output:
+        autoSend: true
+        messages: Local.LastMessage
+    - kind: SetVariable
+      id: setTurnCountAction
+      variable: Local.TurnCount
+      value: =Local.TurnCount +1
+    - kind: ConditionGroup
+      id: conditionGroupAction
+      conditions:
+        - condition: |-
+            =!IsBlank(Find(
+            """status"": ""won""",
+            Lower(Last(Local.LastMessage).Text)))
+          actions: []
+          id: testWinConditionAction
+        - condition: =Local.TurnCount >=10
+          actions:
+            - kind: SendActivity
+              activity: '{"status": "lost", "number": "-1"}'
+              id: gameLostMessageAction
+          id: testTurnCountAction
+      elseActions:
+        - kind: GotoAction
+          actionId: player
+          id: GoToAction
+    - kind: EndConversation
+      id: endConversationAction
+id: ""
+name: guess-my-number
+description: ""

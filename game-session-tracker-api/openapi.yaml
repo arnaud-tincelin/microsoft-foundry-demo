@@ -1,0 +1,201 @@
+openapi: 3.0.1
+info:
+  title: Game Session Tracker API
+  description: REST API for tracking 'Guess My Number' game sessions
+  version: '1.0'
+paths:
+  /sessions:
+    post:
+      summary: Record a completed game session
+      description: "Record a completed game session with the conversation ID, number picked, and outcome.\n\n- **conversation_id**: Unique identifier for the conversation/game session\n- **number_picked**: The number that was picked in the game (minimum: 1)\n- **status**: Whether the player won or lost the game (must be 'won' or 'lost')"
+      operationId: record_game_session_sessions_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GameSession'
+            example:
+              conversation_id: string
+              number_picked: 0
+              status: string
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Record Game Session Sessions Post
+                type: object
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+              example:
+                detail:
+                  - loc:
+                      - { }
+                    msg: string
+                    type: string
+    get:
+      summary: Retrieve recent game sessions
+      description: "Retrieve the last N game sessions with all details.\n\n- **limit**: Maximum number of sessions to retrieve (default: 10, max: 100)"
+      operationId: get_recent_sessions_sessions_get
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            title: Limit
+            type: integer
+            default: 10
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Get Recent Sessions Sessions Get
+                type: array
+                items:
+                  $ref: '#/components/schemas/GameSessionResponse'
+              example:
+                - id: string
+                  timestamp: string
+                  conversation_id: string
+                  number_picked: 0
+                  status: string
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+              example:
+                detail:
+                  - loc:
+                      - { }
+                    msg: string
+                    type: string
+  /sessions/last:
+    get:
+      summary: Get the most recent game session
+      description: "Check if the player won or lost their most recent game.\n\nReturns details of the last game session including outcome, number picked, and timestamp."
+      operationId: get_last_game_outcome_sessions_last_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GameSessionResponse'
+              example:
+                id: string
+                timestamp: string
+                conversation_id: string
+                number_picked: 0
+                status: string
+  /health:
+    get:
+      summary: Health check endpoint
+      description: Health check endpoint to verify API is running.
+      operationId: health_check_health_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Health Check Health Get
+                type: object
+components:
+  schemas:
+    GameSession:
+      title: GameSession
+      required:
+        - conversation_id
+        - number_picked
+        - status
+      type: object
+      properties:
+        conversation_id:
+          title: Conversation Id
+          type: string
+          description: Unique identifier for the conversation/game session
+        number_picked:
+          title: Number Picked
+          minimum: 1.0
+          type: integer
+          description: 'The number that was picked in the game (minimum: 1)'
+        status:
+          title: Status
+          pattern: ^(won|lost)$
+          type: string
+          description: Whether the player won or lost the game (must be 'won' or 'lost')
+    GameSessionResponse:
+      title: GameSessionResponse
+      required:
+        - id
+        - timestamp
+        - conversation_id
+        - number_picked
+        - status
+      type: object
+      properties:
+        id:
+          title: Id
+          type: string
+        timestamp:
+          title: Timestamp
+          type: string
+        conversation_id:
+          title: Conversation Id
+          type: string
+        number_picked:
+          title: Number Picked
+          type: integer
+        status:
+          title: Status
+          type: string
+    HTTPValidationError:
+      title: HTTPValidationError
+      type: object
+      properties:
+        detail:
+          title: Detail
+          type: array
+          items:
+            $ref: '#/components/schemas/ValidationError'
+    ValidationError:
+      title: ValidationError
+      required:
+        - loc
+        - msg
+        - type
+      type: object
+      properties:
+        loc:
+          title: Location
+          type: array
+          items:
+            anyOf:
+              - type: string
+              - type: integer
+        msg:
+          title: Message
+          type: string
+        type:
+          title: Error Type
+          type: string
+  securitySchemes:
+    apiKeyHeader:
+      type: apiKey
+      name: Ocp-Apim-Subscription-Key
+      in: header
+    apiKeyQuery:
+      type: apiKey
+      name: subscription-key
+      in: query
+security:
+  - apiKeyHeader: [ ]
+  - apiKeyQuery: [ ]

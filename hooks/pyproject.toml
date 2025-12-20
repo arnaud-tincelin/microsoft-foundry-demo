@@ -1,0 +1,20 @@
+[project]
+name = "ai-projects"
+version = "0.1.0"
+description = "Management of AI projects"
+requires-python = ">=3.13"
+dependencies = [
+    "python-dotenv",
+    "azure-ai-projects",
+    "azure-identity",
+]
+
+[tool.uv]
+prerelease = "allow"
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
