@@ -63,10 +63,10 @@ def create_managed_agents():
     print()
 
 
-def create_selfhosted_agent():
-    """Deploy self-hosted agent from container image"""
+def create_hosted_agent():
+    """Deploy hosted agent from container image"""
 
-    print("🐳 Deploying Self-Hosted Agent...")
+    print("🐳 Deploying Hosted Agent...")
     print(f"   Container Image: {CONTAINER_IMAGE}")
     print()
 
@@ -122,7 +122,7 @@ if __name__ == "__main__":
     try:
         create_managed_agents()
         create_workflow_agent()
-        create_selfhosted_agent()
+        create_hosted_agent()
     except Exception as e:
         print(f"❌ Error: {e}", file=sys.stderr)
         import traceback

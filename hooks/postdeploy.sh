@@ -4,16 +4,16 @@ set -e
 echo "🚀 Post-deployment: Creating and deploying agents..."
 echo ""
 
-echo "🔨 Building self-hosted agent container..."
+echo "🔨 Building hosted agent container..."
 AGENT_IMAGE_TAG="latest"
-# az acr build \
-#   --registry ${AZURE_CONTAINER_REGISTRY_ENDPOINT} \
-#   --image selfhostedagent:$AGENT_IMAGE_TAG \
-#   --file selfHostedAgent/Dockerfile \
-#   selfHostedAgent/ \
-#   --no-logs &
+az acr build \
+  --registry ${AZURE_CONTAINER_REGISTRY_ENDPOINT} \
+  --image hostedagent:$AGENT_IMAGE_TAG \
+  --file hostedAgent/Dockerfile \
+  hostedAgent/ \
+  --no-logs &
 
-export CONTAINER_IMAGE="${AZURE_CONTAINER_REGISTRY_ENDPOINT}/selfhostedagent:${AGENT_IMAGE_TAG}"
+export CONTAINER_IMAGE="${AZURE_CONTAINER_REGISTRY_ENDPOINT}/hostedagent:${AGENT_IMAGE_TAG}"
 echo ""
 
 echo "📦 Deploying agents to Foundry..."
