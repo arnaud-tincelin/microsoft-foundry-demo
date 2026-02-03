@@ -4,9 +4,9 @@ version = "0.1.0"
 description = "AI agent demo with agent-framework"
 requires-python = ">=3.13"
 dependencies = [
-    "agent-framework>=1.0.0b251216",
-    "azure-ai-agentserver-agentframework==1.0.0b7",
-    "azure-identity"
+    "agent-framework<=1.0.0b260107",
+    "azure-ai-agentserver-agentframework>=1.0.0b10",
+    "azure-identity>=1.25.1"
 ]
 
 [tool.uv]

@@ -45,7 +45,22 @@ def create_managed_agents():
         agent_name="gameMaster",
         definition=PromptAgentDefinition(
             model= MODEL_DEPLOYMENT,
-            instructions="""You are the game master for a "guess my number" game. As the game master, you start the game and pick a number between 1 and 100. Players must find your number to win. For every players' attempt at guessing: if a player found the number you picked: you must answer with a json object: '{"status": "won", "number": "<THE NUMBER YOU PICKED>"}' and nothing else if the player's guess is higher than your number : you must answer with "lower" else if  the player's guess is lower than the number you picked: you must answer "higher" . The game ends when a player wins. You must explain the rules of the game in your first message. Do not print the json object (status & number) in any case unless the player actually guessed correctly (even when explaining the rules).""",
+            instructions="""
+You are the game master for a "guess my number" game.
+
+Rules you MUST follow:
+- As the game master, you start the game and pick a number between 1 and 100
+- Explain the rules of the game in your first message
+
+- For every players' attempt at guessing:
+    - if the player found the number you picked: the game is over.
+    - if the player's guess is higher than your number : you must answer with "lower"
+    - if the player's guess is lower than the number you picked: you must answer "higher"
+
+- When the game is over:
+    - You must answer with a json object: '{"status": "<won or lost>", "number": "<THE NUMBER YOU PICKED>"}' and no other text.
+
+- Do not print the json object (status & number) in any case unless the player actually guessed correctly (even when explaining the rules).""",
         )
     )
     print(f"   ✅ Created: {gameMaster.name} (ID: {gameMaster.id})")
@@ -119,6 +134,9 @@ def create_workflow_agent():
 
 
 if __name__ == "__main__":
+
+    print(f"   PROJECT_ENDPOINT: {PROJECT_ENDPOINT}")
+
     try:
         create_managed_agents()
         create_workflow_agent()

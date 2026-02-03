@@ -4,6 +4,11 @@ set -e
 echo "🚀 Post-deployment: Creating and deploying agents..."
 echo ""
 
+# Load Bicep outputs into environment variables
+echo "📥 Loading Bicep outputs into environment..."
+eval "$(azd env get-values)"
+echo ""
+
 echo "🔨 Building hosted agent container..."
 AGENT_IMAGE_TAG="latest"
 az acr build \

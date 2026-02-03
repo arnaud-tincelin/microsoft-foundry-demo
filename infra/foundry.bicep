@@ -92,14 +92,14 @@ resource foundry 'Microsoft.CognitiveServices/accounts@2025-10-01-preview' = {
     }
   }
 
-  // resource agentsCapabilityHost 'capabilityHosts' = {
-  //   name: 'agents'
-  //   properties: {
-  //     capabilityHostKind: 'Agents'
-  //     #disable-next-line BCP037
-  //     enablePublicHostingEnvironment: true
-  //   }
-  // }
+  resource agentsCapabilityHost 'capabilityHosts' = {
+    name: 'agents'
+    properties: {
+      capabilityHostKind: 'Agents'
+      #disable-next-line BCP037
+      enablePublicHostingEnvironment: true
+    }
+  }
 }
 
 resource aiFoundryProjectCanPullFromAcr 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
