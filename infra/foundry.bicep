@@ -14,6 +14,16 @@ param appInsightsName string
 @description('Name for the Azure Container Registry')
 param acrName string
 
+@description('MCP Server URL from APIM')
+param mcpServerUrl string
+
+@description('Header name for the MCP subscription key')
+param mcpServerCredentialKey string
+
+@description('MCP subscription key value')
+@secure()
+param mcpServerCredentialValue string
+
 resource acr 'Microsoft.ContainerRegistry/registries@2025-11-01' existing = {
   name: acrName
 }
@@ -23,7 +33,7 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' existing = {
 }
 
 resource foundry 'Microsoft.CognitiveServices/accounts@2025-10-01-preview' = {
-  name: 'foundry-${resourceToken}'
+  name: 'foundry-demo-${resourceToken}'
   location: location
   tags: tags
   sku: {
@@ -35,7 +45,7 @@ resource foundry 'Microsoft.CognitiveServices/accounts@2025-10-01-preview' = {
   }
   properties: {
     allowProjectManagement: true
-    customSubDomainName: 'foundry-${resourceToken}'
+    customSubDomainName: 'foundry-demo-${resourceToken}'
     networkAcls: {
       defaultAction: 'Allow'
       virtualNetworkRules: []
@@ -64,7 +74,7 @@ resource foundry 'Microsoft.CognitiveServices/accounts@2025-10-01-preview' = {
   }
 
   resource project 'projects' = {
-    name: 'demo-project'
+    name: 'foundry-demo'
     location: location
     identity: {
       type: 'SystemAssigned'
@@ -87,6 +97,25 @@ resource foundry 'Microsoft.CognitiveServices/accounts@2025-10-01-preview' = {
         metadata: {
           ApiType: 'Azure'
           ResourceId: appInsights.id
+        }
+      }
+    }
+
+    resource mcpToolConnection 'connections' = {
+      name: 'game-sessions-tracker'
+      properties: {
+        category: 'RemoteTool'
+        target: mcpServerUrl
+        authType: 'CustomKeys'
+        isSharedToAll: true
+        credentials: {
+          keys: {
+            '${mcpServerCredentialKey}': mcpServerCredentialValue
+          }
+        }
+        metadata: {
+          #disable-next-line BCP037
+          type: 'custom_MCP'
         }
       }
     }

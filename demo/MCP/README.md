@@ -2,10 +2,10 @@
 
 > I want my agents to use some of my APIs, how to achieve that?
 
-1. From the APIM portal, create a new MCP Server from the **Game Session Tracker API**. Add the following description:
+The MCP server and tool are automatically deployed by `azd up`:
 
-    > API to perform operations about Guessing Games, such as to create a session or retrieve the last played games
+- The **Game Session Tracker API** is exposed as an MCP server in APIM at `<APIM_GATEWAY_URL>/game-session-mcp/mcp`
+- The **mcpClient** agent in Foundry is configured with the `GuessingGameTracker` MCP tool pointing to the APIM MCP server
 
-1. From the Foundry project portal, create a new MCP tool (MCP), using the MCP Server from the previous step
-1. Click on **Use in agent** and select the **mcpClient** agent
-1. From the **mcpClient** agent playground, ask *what is the result of the latest game played?*. The agent shall prompt you for approval to call the MCP tool
+1. From the Foundry project portal, open the **mcpClient** agent playground
+1. Ask *what is the result of the latest game played?*. The agent shall use the MCP tool to call the APIM MCP server and return the results

@@ -8,9 +8,8 @@ import requests
 from dotenv import load_dotenv, dotenv_values
 from azure.identity import DefaultAzureCredential
 from azure.ai.projects import AIProjectClient
-from azure.ai.projects.models import ResponseStreamEventType
 
-load_dotenv()
+load_dotenv(override=True)
 project_endpoint = os.getenv("PROJECT_ENDPOINT", "")
 
 print(f"🚀 Starting Guess My Number Agent Workflow @ {project_endpoint}")
@@ -33,7 +32,7 @@ with project_client:
 
     stream = openai_client.responses.create(
         conversation=conversation.id,
-        extra_body={"agent": {"name": workflow["name"], "type": "agent_reference"}},
+        extra_body={"agent_reference": {"name": workflow["name"], "type": "agent_reference"}},
         input="Hello Agent",
         stream=True,
         metadata={"x-ms-debug-mode-enabled": "1"},
@@ -46,12 +45,12 @@ with project_client:
     current_agent = None
 
     for event in stream:
-        if event.type == ResponseStreamEventType.RESPONSE_OUTPUT_ITEM_ADDED and event.item.type == "workflow_action":
+        if event.type == "response.output_item.added" and hasattr(event, 'item') and getattr(event.item, 'type', '') == "workflow_action":
             current_agent = event.item.action_id
             print(f"\n[{current_agent}]", end=' ', flush=True)
-        elif event.type == ResponseStreamEventType.RESPONSE_OUTPUT_TEXT_DONE:
+        elif event.type == "response.output_text.done":
             full_output.append(event.text)
-        elif event.type == ResponseStreamEventType.RESPONSE_OUTPUT_TEXT_DELTA:
+        elif event.type == "response.output_text.delta":
             print(event.delta, end='', flush=True)
 
     print()  # New line after all deltas

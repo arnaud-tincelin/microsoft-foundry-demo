@@ -14,6 +14,7 @@ This demo runs exclusively on local environment. It demonstrates how [Microsoft 
 
     ```bash
     docker build -t myagent --file hostedAgent/Dockerfile hostedAgent/. # you may skip this and use the image from the ACR
+    # if the container already exists: docker rm -f myagent
     docker run -d --name myagent -p 8088:8088 --gpus all myagent
     curl -X POST http://localhost:8088/responses -H "Content-Type: application/json" -d '{"input": "Where is Paris?", "stream": false}'
     ```

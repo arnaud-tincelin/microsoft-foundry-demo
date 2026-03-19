@@ -13,6 +13,7 @@ services:
     language: python
     host: containerapp
     docker:
+      remoteBuild: true
       path: ./Dockerfile
       context: ./
 

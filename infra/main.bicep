@@ -7,7 +7,6 @@ param environmentName string
 
 @minLength(1)
 @description('Primary location for all resources but AI Foundry.')
-@allowed(['northcentralus'])
 param location string
 
 #disable-next-line no-unused-vars
@@ -24,6 +23,9 @@ module foundryModule 'foundry.bicep' = {
     location: location
     appInsightsName: monitoringModule.outputs.appInsightsName
     acrName: registryModule.outputs.acrName
+    mcpServerUrl: apimModule.outputs.mcpServerUrl
+    mcpServerCredentialKey: apimModule.outputs.mcpServerCredentialKey
+    mcpServerCredentialValue: apimModule.outputs.mcpServerCredentialValue
     tags:tags
   }
 }
@@ -88,3 +90,4 @@ output APIM_GATEWAY_URL string = apimModule.outputs.apimGatewayUrl
 output APIM_API_URL string = apimModule.outputs.gameSessionsApiUrl
 output APIM_NAME string = apimModule.outputs.apimName
 output AZURE_RESOURCE_GROUP string = resourceGroup().name
+output MCP_SERVER_URL string = apimModule.outputs.mcpServerUrl

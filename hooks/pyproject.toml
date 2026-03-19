@@ -5,7 +5,7 @@ description = "Management of AI projects"
 requires-python = ">=3.13"
 dependencies = [
     "python-dotenv",
-    "azure-ai-projects",
+    "azure-ai-projects>=2.0.1",
     "azure-identity",
 ]
 

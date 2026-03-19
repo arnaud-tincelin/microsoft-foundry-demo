@@ -2,14 +2,14 @@
 """
 Deploy AI Agents to Microsoft Foundry
 """
-from http import client
 import os
 import sys
 from azure.ai.projects import AIProjectClient
 from azure.ai.projects.models import (
-    ImageBasedHostedAgentDefinition,
+    HostedAgentDefinition,
     PromptAgentDefinition,
     WorkflowAgentDefinition,
+    MCPTool,
     ProtocolVersionRecord,
     AgentProtocol
 )
@@ -17,9 +17,13 @@ from azure.identity import DefaultAzureCredential
 
 PROJECT_ENDPOINT = os.getenv("PROJECT_ENDPOINT", "")
 CONTAINER_IMAGE = os.getenv("CONTAINER_IMAGE", "")
-APPINSIGHTS_CONNECTION_STRING = os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING", "")
+APPINSIGHTS_CONNECTION_STRING = os.getenv(
+    "APPLICATIONINSIGHTS_CONNECTION_STRING", "")
 MODEL_DEPLOYMENT = os.getenv("MODEL_DEPLOYMENT", "")
-WORKFLOW_FILE = os.path.join(os.path.dirname(__file__), "..", "workflow", "workflow.yaml")
+WORKFLOW_FILE = os.path.join(os.path.dirname(
+    __file__), "..", "workflow", "workflow.yaml")
+MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "")
+
 
 def create_managed_agents():
     """Create 2 managed agents"""
@@ -33,7 +37,7 @@ def create_managed_agents():
     player = client.agents.create_version(
         agent_name="player",
         definition=PromptAgentDefinition(
-            model= MODEL_DEPLOYMENT,
+            model=MODEL_DEPLOYMENT,
             instructions="""you are a player. You play games that game master will propose. The game master will explain you the rules. You cannot switch role with the game master.""",
         )
     )
@@ -44,7 +48,7 @@ def create_managed_agents():
     gameMaster = client.agents.create_version(
         agent_name="gameMaster",
         definition=PromptAgentDefinition(
-            model= MODEL_DEPLOYMENT,
+            model=MODEL_DEPLOYMENT,
             instructions="""
 You are the game master for a "guess my number" game.
 
@@ -67,11 +71,19 @@ Rules you MUST follow:
     print()
 
     print("🐳 Deploying MCP Client Agent...")
+    mcp_connection = client.connections.get("game-sessions-tracker")
     mcpClientAgent = client.agents.create_version(
         agent_name="mcpClient",
         definition=PromptAgentDefinition(
-            model= MODEL_DEPLOYMENT,
+            model=MODEL_DEPLOYMENT,
             instructions="""You are a helpful assistant that MUST use the GuessingGameTracker MCP tool to answer all the questions from user about a guessing game.""",
+            tools=[
+                MCPTool(
+                    server_label="GuessingGameTracker",
+                    project_connection_id=mcp_connection.id,
+                    server_url=MCP_SERVER_URL,
+                ),
+            ],
         )
     )
     print(f"   ✅ Created: {mcpClientAgent.name} (ID: {mcpClientAgent.id})")
@@ -87,14 +99,16 @@ def create_hosted_agent():
 
     client = AIProjectClient(
         endpoint=PROJECT_ENDPOINT,
-        credential=DefaultAzureCredential()
+        credential=DefaultAzureCredential(),
+        headers={"Foundry-Features": "HostedAgents=V1Preview"}
     )
 
     agent = client.agents.create_version(
         agent_name="ollama-agent",
-        definition=ImageBasedHostedAgentDefinition(
+        definition=HostedAgentDefinition(
             container_protocol_versions=[
-                ProtocolVersionRecord(protocol=AgentProtocol.RESPONSES, version="v1")
+                ProtocolVersionRecord(
+                    protocol=AgentProtocol.RESPONSES, version="v1")
             ],
             cpu="3.5",
             memory="7Gi",
@@ -115,7 +129,8 @@ def create_workflow_agent():
 
     client = AIProjectClient(
         endpoint=PROJECT_ENDPOINT,
-        credential=DefaultAzureCredential()
+        credential=DefaultAzureCredential(),
+        headers={"Foundry-Features": "WorkflowAgents=V1Preview"}
     )
 
     with open(WORKFLOW_FILE, 'r') as f:
@@ -137,12 +152,15 @@ if __name__ == "__main__":
 
     print(f"   PROJECT_ENDPOINT: {PROJECT_ENDPOINT}")
 
-    try:
-        create_managed_agents()
-        create_workflow_agent()
-        create_hosted_agent()
-    except Exception as e:
-        print(f"❌ Error: {e}", file=sys.stderr)
-        import traceback
-        traceback.print_exc()
+    errors = []
+    for step in [create_managed_agents, create_workflow_agent, create_hosted_agent]:
+        try:
+            step()
+        except Exception as e:
+            print(f"❌ Error in {step.__name__}: {e}", file=sys.stderr)
+            import traceback
+            traceback.print_exc()
+            errors.append(e)
+
+    if errors:
         sys.exit(1)
