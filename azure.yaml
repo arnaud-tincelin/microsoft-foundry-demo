@@ -16,6 +16,7 @@ services:
       remoteBuild: true
       path: ./Dockerfile
       context: ./
+      remoteBuild: true
 
 hooks:
   postprovision:
