@@ -6,8 +6,18 @@ targetScope = 'resourceGroup'
 param environmentName string
 
 @minLength(1)
-@description('Primary location for all resources but AI Foundry.')
+@description('Primary location for Foundry and application resources; AI Gateway and Automation have their own locations.')
 param location string
+
+@description('Logic Apps Automation preview region, independent of Foundry and AI Gateway.')
+param automationLocation string = 'westus'
+
+@description('AI Gateway preview region, independent of the Foundry/hosted-agent region.')
+@allowed([
+  'eastus2'
+  'swedencentral'
+])
+param aiGatewayLocation string = 'eastus2'
 
 #disable-next-line no-unused-vars
 var resourceToken = toLower(uniqueString(resourceGroup().id, environmentName, location))
@@ -23,9 +33,7 @@ module foundryModule 'foundry.bicep' = {
     location: location
     appInsightsName: monitoringModule.outputs.appInsightsName
     acrName: registryModule.outputs.acrName
-    mcpServerUrl: apimModule.outputs.mcpServerUrl
-    mcpServerCredentialKey: apimModule.outputs.mcpServerCredentialKey
-    mcpServerCredentialValue: apimModule.outputs.mcpServerCredentialValue
+    gatewayPrincipalId: aiGatewayModule.outputs.principalId
     tags:tags
   }
 }
@@ -72,22 +80,32 @@ module containerAppsModule 'containerApps.bicep' = {
   }
 }
 
-module apimModule 'apim.bicep' = {
-  name: 'apim'
+module aiGatewayModule 'aiGateway.bicep' = {
+  name: 'aiGateway'
   params: {
-    location: location
+    location: aiGatewayLocation
     resourceToken: resourceToken
-    gameTrackerServiceUrl: containerAppsModule.outputs.gameSessionTrackerAppUrl
     tags:tags
   }
 }
 
+// The preview project PUT is create-only in practice; the azd hook checks before creating.
+resource automationProject 'Microsoft.Logic/automationProjects@2026-04-01-preview' existing = {
+  name: automationLocation == location ? 'automation-${resourceToken}' : 'automation-${resourceToken}-${automationLocation}'
+}
+
 output PROJECT_ENDPOINT string = foundryModule.outputs.projectEndpoint
+output FOUNDRY_ACCOUNT_RESOURCE_ID string = foundryModule.outputs.accountResourceId
+output FOUNDRY_ACCOUNT_ENDPOINT string = foundryModule.outputs.accountEndpoint
+output FOUNDRY_PROJECT_RESOURCE_ID string = foundryModule.outputs.projectResourceId
 output APPLICATIONINSIGHTS_CONNECTION_STRING string = monitoringModule.outputs.appInsightsConnectionString
 output AZURE_CONTAINER_REGISTRY_ENDPOINT string = registryModule.outputs.loginServer
 output MODEL_DEPLOYMENT string = foundryModule.outputs.gpt41DeploymentName
-output APIM_GATEWAY_URL string = apimModule.outputs.apimGatewayUrl
-output APIM_API_URL string = apimModule.outputs.gameSessionsApiUrl
-output APIM_NAME string = apimModule.outputs.apimName
+output AI_GATEWAY_URL string = aiGatewayModule.outputs.gatewayUrl
+output AI_GATEWAY_NAME string = aiGatewayModule.outputs.gatewayName
+output AI_GATEWAY_RESOURCE_ID string = aiGatewayModule.outputs.gatewayResourceId
+output GAME_TRACKER_API_URL string = containerAppsModule.outputs.gameSessionTrackerAppUrl
 output AZURE_RESOURCE_GROUP string = resourceGroup().name
-output MCP_SERVER_URL string = apimModule.outputs.mcpServerUrl
+output AUTOMATION_PROJECT_NAME string = automationProject.name
+output AUTOMATION_PROJECT_RESOURCE_ID string = automationProject.id
+output AUTOMATION_LOCATION string = automationLocation

@@ -118,6 +118,9 @@ venv.bak/
 # uv
 .uv/
 uv.lock
+!hooks/uv.lock
+!hostedAgent/uv.lock
+!game-session-tracker-api/uv.lock
 
 # Spyder project settings
 .spyderproject

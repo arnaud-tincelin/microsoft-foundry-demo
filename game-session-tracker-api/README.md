@@ -1,60 +1,12 @@
 # Game Session Tracker API - Container Apps Deployment
 
-FastAPI REST API for game session tracking, deployed to Azure Container Apps with Cosmos DB backend and exposed via Azure API Management.
+FastAPI REST API for game session tracking, deployed to Azure Container Apps with Cosmos DB. Logic Apps Automation records completed games through the REST endpoint; agents access selected operations as MCP tools through the dedicated AI Gateway.
 
 ## Deployment
 
-1. Deploy Infrastructure (from root)
-
-1. Configuration
-
-    ```bash
-    export ACR_NAME="aidemohostedagents7"
-    export CONTAINER_APP_NAME="mcp-game-server"
-    export APIM_NAME="ai-demo-ati7"
-    export RESOURCE_GROUP="ai-demo7"
-    ```
-
-1. Build & Push Docker Image
-
-    ```bash
-    az acr build --registry $ACR_NAME --image mcp-game-server:latest --file mcp-game-server/Dockerfile mcp-game-server/.
-    ```
-
-1. Update Container App Image
-    ```bash
-    az containerapp update \
-      --name $CONTAINER_APP_NAME \
-      --resource-group $RESOURCE_GROUP \
-      --image ${ACR_NAME}.azurecr.io/mcp-game-server:latest
-    ```
-
-1. Import API to APIM
-
-    ```bash
-    export CONTAINER_APP_URL=$(az containerapp show \
-      --name $CONTAINER_APP_NAME \
-      --resource-group $RESOURCE_GROUP \
-      --query properties.configuration.ingress.fqdn -o tsv)
-    
-    az apim api import \
-      --resource-group $RESOURCE_GROUP \
-      --service-name $APIM_NAME \
-      --path game-sessions \
-      --api-id game-session-api \
-      --specification-format OpenApi \
-      --specification-url https://${CONTAINER_APP_URL}/openapi.json \
-      --service-url https://${CONTAINER_APP_URL}
-    ```
-
-1. Get API Gateway URL
-
-    ```bash
-    az apim show \
-      --name $APIM_NAME \
-      --resource-group $RESOURCE_GROUP \
-      --query gatewayUrl -o tsv
-    ```
+1. Run `azd up` from the repository root to provision infrastructure and build/deploy this service.
+1. Read the backend URL with `azd env get-value GAME_TRACKER_API_URL`.
+1. Follow [AI Gateway setup](../demo/AIGateway/README.md) to import the live `/openapi.json` as MCP tools. Classic `az apim api import` is not used with the dedicated gateway.
 
 ## API Endpoints
 
@@ -68,7 +20,8 @@ FastAPI REST API for game session tracking, deployed to Azure Container Apps wit
 ## Configuration
 
 - **Managed Identity**: Container App uses system-assigned identity with Cosmos DB Data Contributor role
-- **Authentication**: No credentials needed - DefaultAzureCredential uses managed identity
+- **Cosmos DB authentication**: DefaultAzureCredential uses the Container App's managed identity.
+- **Inbound authentication**: The demo REST backend is public and unauthenticated. The gateway authenticates MCP clients, but does not protect direct backend HTTP calls. Add backend authentication/network restrictions before production use.
 - **Environment Variables**: Automatically injected via Bicep
   - `COSMOS_ENDPOINT`
   - `COSMOS_DATABASE_NAME`

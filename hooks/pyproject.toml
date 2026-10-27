@@ -5,12 +5,18 @@ description = "Management of AI projects"
 requires-python = ">=3.13"
 dependencies = [
     "python-dotenv",
-    "azure-ai-projects>=2.0.1",
+    "azure-ai-projects==2.9.0",
+    "openai>=3.0.0,<4",
     "azure-identity",
 ]
 
 [tool.uv]
-prerelease = "allow"
+prerelease = "if-necessary"
+
+[[tool.uv.index]]
+name = "cfs"
+url = "https://packagefeedproxy.microsoft.io/pypi/simple"
+default = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["."]

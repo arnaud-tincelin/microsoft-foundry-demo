@@ -8,11 +8,11 @@
     "location": {
       "value": "${AZURE_LOCATION}"
     },
-    "aiFoundryLocation": {
-      "value": "switzerlandnorth"
+    "aiGatewayLocation": {
+      "value": "${AI_GATEWAY_LOCATION=eastus2}"
     },
-    "setlistfmApiKey": {
-      "value": "4b15bd76-3455-4f06-b606-293848fbad49"
+    "automationLocation": {
+      "value": "${AUTOMATION_LOCATION=westus}"
     }
   }
 }

@@ -6,14 +6,14 @@ WORKDIR /app
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 # Copy project files
-COPY pyproject.toml ./
+COPY pyproject.toml uv.lock ./
 COPY server.py ./
 
 # Install dependencies
-RUN uv sync
+RUN uv sync --frozen
 
 # Expose port for FastAPI
 EXPOSE 8080
 
 # Run the FastAPI server
-CMD ["uv", "run", "uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["uv", "run", "--frozen", "uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8080"]

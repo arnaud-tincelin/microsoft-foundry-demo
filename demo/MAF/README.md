@@ -7,8 +7,9 @@ This demo runs exclusively on local environment. It demonstrates how [Microsoft 
 1. Review the content of [hostedAgent/hostedAgent.py](../../hostedAgent/hostedAgent.py):
 
     - `OpenAIChatClient`: chat completion class
-    - `ChatAgent`: create an agent (model, instructions, tools, ...)
-    - `from_agent_framework`: adapter for exposing the agent as an API
+    - `Agent`: create an agent with the Ollama model and its instructions
+    - `ResponsesAgentServerHost`: expose the agent through the current Responses protocol
+    - `ResponseContext` and `TextResponse`: restore request-local conversation history and return a protocol response without sharing chat state between users
 
 1. Call the agent from a local docker container:
 

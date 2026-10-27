@@ -1,0 +1,151 @@
+{
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+      "gameMasterAgentVersion": {
+        "type": "String"
+      },
+      "modelName": {
+        "type": "String",
+        "defaultValue": "gpt-4.1"
+      }
+    },
+    "triggers": {
+      "When_an_HTTP_request_is_received": {
+        "type": "Request",
+        "kind": "Http",
+        "inputs": {
+          "method": "POST",
+          "schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["number", "guess"],
+            "properties": {
+              "number": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100
+              },
+              "guess": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100
+              }
+            }
+          }
+        },
+        "runtimeConfiguration": {
+          "secureData": {
+            "properties": ["outputs"]
+          }
+        }
+      }
+    },
+    "actions": {
+      "Foundry_agent": {
+        "type": "Agent",
+        "inputs": {
+          "agentModelType": "FoundryAgentServiceV2",
+          "modelConfigurations": {
+            "model1": {
+              "referenceName": "foundry-project"
+            }
+          },
+          "parameters": {
+            "foundryAgentId": "gameMaster",
+            "foundryAgentName": "gameMaster",
+            "foundryAgentVersion": "v2",
+            "foundryVersionName": "@parameters('gameMasterAgentVersion')",
+            "deploymentId": "@parameters('modelName')",
+            "messages": [
+              {
+                "role": "User",
+                "content": "@concat('Automation turn. The authoritative secret number is ', string(triggerBody()['number']), '. The player guessed ', string(triggerBody()['guess']), '. Return only {\"hint\":\"higher\"} if the guess is below the secret, {\"hint\":\"lower\"} if above, or {\"hint\":\"correct\"} if equal. Do not start a new game or reveal the secret.')"
+              }
+            ]
+          },
+          "retryPolicy": {
+            "type": "none"
+          }
+        },
+        "limit": {
+          "count": 3,
+          "timeout": "PT1M"
+        },
+        "operationOptions": "FailWhenLimitsReached",
+        "runtimeConfiguration": {
+          "secureData": {
+            "properties": ["inputs", "outputs"]
+          }
+        },
+        "runAfter": {}
+      },
+      "Validate_master_hint": {
+        "type": "ParseJson",
+        "inputs": {
+          "content": "@outputs('Foundry_agent')['lastAssistantMessage']",
+          "schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["hint"],
+            "properties": {
+              "hint": {
+                "type": "string",
+                "enum": "@createArray(if(equals(triggerBody()['guess'], triggerBody()['number']), 'correct', if(less(triggerBody()['guess'], triggerBody()['number']), 'higher', 'lower')))"
+              }
+            }
+          }
+        },
+        "runtimeConfiguration": {
+          "secureData": {
+            "properties": ["inputs"]
+          }
+        },
+        "runAfter": {
+          "Foundry_agent": ["Succeeded"]
+        }
+      },
+      "Return_agent_response": {
+        "type": "Response",
+        "inputs": {
+          "statusCode": 200,
+          "body": {
+            "status": "@if(equals(body('Validate_master_hint')['hint'], 'correct'), 'won', 'playing')",
+            "hint": "@body('Validate_master_hint')['hint']",
+            "number": "@if(equals(body('Validate_master_hint')['hint'], 'correct'), triggerBody()['number'], -1)"
+          }
+        },
+        "runAfter": {
+          "Validate_master_hint": ["Succeeded"]
+        }
+      },
+      "Respond_with_error": {
+        "type": "Response",
+        "inputs": {
+          "statusCode": 502,
+          "body": {
+            "error": "The Foundry game master failed or returned an incorrect hint."
+          }
+        },
+        "runAfter": {
+          "Validate_master_hint": ["Failed", "Skipped", "TimedOut"]
+        }
+      },
+      "Fail_run": {
+        "type": "Terminate",
+        "inputs": {
+          "runStatus": "Failed",
+          "runError": {
+            "code": "InvalidGameMasterTurn",
+            "message": "The Foundry game master failed or returned an incorrect hint."
+          }
+        },
+        "runAfter": {
+          "Respond_with_error": ["Succeeded", "Failed", "TimedOut"]
+        }
+      }
+    }
+  },
+  "kind": "Stateful"
+}

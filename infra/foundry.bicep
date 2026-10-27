@@ -14,15 +14,8 @@ param appInsightsName string
 @description('Name for the Azure Container Registry')
 param acrName string
 
-@description('MCP Server URL from APIM')
-param mcpServerUrl string
-
-@description('Header name for the MCP subscription key')
-param mcpServerCredentialKey string
-
-@description('MCP subscription key value')
-@secure()
-param mcpServerCredentialValue string
+@description('System-assigned identity of the dedicated AI Gateway.')
+param gatewayPrincipalId string
 
 resource acr 'Microsoft.ContainerRegistry/registries@2025-11-01' existing = {
   name: acrName
@@ -83,6 +76,9 @@ resource foundry 'Microsoft.CognitiveServices/accounts@2025-10-01-preview' = {
       description: 'Demo Project'
       displayName: 'Demo Project'
     }
+    dependsOn: [
+      gpt41Deployment
+    ]
 
     resource appInsightConnection 'connections' = {
       name: 'appinsights'
@@ -100,25 +96,6 @@ resource foundry 'Microsoft.CognitiveServices/accounts@2025-10-01-preview' = {
         }
       }
     }
-
-    resource mcpToolConnection 'connections' = {
-      name: 'game-sessions-tracker'
-      properties: {
-        category: 'RemoteTool'
-        target: mcpServerUrl
-        authType: 'CustomKeys'
-        isSharedToAll: true
-        credentials: {
-          keys: {
-            '${mcpServerCredentialKey}': mcpServerCredentialValue
-          }
-        }
-        metadata: {
-          #disable-next-line BCP037
-          type: 'custom_MCP'
-        }
-      }
-    }
   }
 
   resource agentsCapabilityHost 'capabilityHosts' = {
@@ -128,6 +105,9 @@ resource foundry 'Microsoft.CognitiveServices/accounts@2025-10-01-preview' = {
       #disable-next-line BCP037
       enablePublicHostingEnvironment: true
     }
+    dependsOn: [
+      project::appInsightConnection
+    ]
   }
 }
 
@@ -153,6 +133,17 @@ resource currentUserCanPerformDataActionsOnFoundry 'Microsoft.Authorization/role
   }
 }
 
+resource gatewayCanInvokeFoundry 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: foundry
+  name: guid(foundry.id, gatewayPrincipalId, azureAiUserRoleDefinition.id)
+  properties: {
+    roleDefinitionId: azureAiUserRoleDefinition.id
+    principalId: gatewayPrincipalId
+    principalType: 'ServicePrincipal'
+    description: 'Allow the AI Gateway managed identity to invoke Foundry models.'
+  }
+}
+
 @description('This is the built-in ACR Pull role. See https://learn.microsoft.com/en-us/azure/role-based-access-control/built-in-roles/containers#acrpull')
 resource acrPullRoleDefinition 'Microsoft.Authorization/roleDefinitions@2022-04-01' existing = {
   name: '7f951dda-4ed3-4680-a7ca-43fe172d538d'
@@ -165,3 +156,6 @@ resource azureAiUserRoleDefinition 'Microsoft.Authorization/roleDefinitions@2022
 
 output projectEndpoint string = foundry::project.properties.endpoints['AI Foundry API']
 output gpt41DeploymentName string = foundry::gpt41Deployment.name
+output accountResourceId string = foundry.id
+output accountEndpoint string = foundry.properties.endpoints['AI Foundry API']
+output projectResourceId string = foundry::project.id
