@@ -252,38 +252,6 @@ def ensure_foundry_access(api, app):
     })
 
 
-def configure_foundry_connection(api, app_url, query):
-    try:
-        connections, _ = api.request(
-            f"{app_url}/vfs/connections.json{query}", scope=AUTOMATION_SCOPE
-        )
-    except AzureRequestError as error:
-        if error.status_code != 404:
-            raise
-        connections = {}
-    agents = connections.setdefault("agentConnections", {})
-    existing = agents.get("foundry-project")
-    endpoint = required("PROJECT_ENDPOINT")
-    resource_id = required("FOUNDRY_PROJECT_RESOURCE_ID")
-    if existing and (existing.get("endpoint") != endpoint
-                     or existing.get("resourceId") != resource_id):
-        raise RuntimeError("The existing foundry-project connection targets a different project.")
-    connection = {
-        "displayName": "Foundry project",
-        "modelProvider": {"id": "/connectionProviders/agent"},
-        "type": "FoundryAgentService",
-        "endpoint": endpoint,
-        "resourceId": resource_id,
-        "authentication": {"type": "ManagedServiceIdentity"},
-    }
-    if existing != connection:
-        agents["foundry-project"] = connection
-        print("Creating the Automation-side managed-identity Foundry project connection...")
-        publish_workflow_artifacts(api, f"{app_url}/deployWorkflowArtifacts{query}", {
-            "connections.json": connections,
-        })
-
-
 def publish_automation(api):
     region = required("AUTOMATION_LOCATION")
     project = quote(required("AUTOMATION_PROJECT_NAME"), safe="")
@@ -329,46 +297,34 @@ def publish_automation(api):
 
     app, _ = api.request(app_url + app_query, scope=AUTOMATION_SCOPE)
     ensure_foundry_access(api, app)
-    configure_foundry_connection(api, app_url, app_query)
-    workflows = {
-        name: json.loads((ROOT / "automation" / filename).read_text(encoding="utf-8"))
-        for name, filename in (
-            ("player-turn", "player-turn.json"),
-            ("game-master-turn", "game-master-turn.json"),
-            ("guessing-game", "workflow.json"),
-        )
-    }
+    workflow = json.loads((ROOT / "automation" / "workflow.json").read_text(encoding="utf-8"))
     parameters = {
+        "foundryProjectEndpoint": {
+            "type": "String", "value": required("PROJECT_ENDPOINT").rstrip("/")
+        },
         "playerAgentVersion": {"type": "String", "value": required("PLAYER_AGENT_VERSION")},
         "gameMasterAgentVersion": {
             "type": "String", "value": required("GAME_MASTER_AGENT_VERSION")
         },
-        "modelName": {"type": "String", "value": required("MODEL_DEPLOYMENT")},
         "gameTrackerApiUrl": {
             "type": "String", "value": required("GAME_TRACKER_API_URL").rstrip("/")
         },
     }
-    # Preview Agent actions are supported only at the workflow's top level.
-    for batch in (("player-turn", "game-master-turn"), ("guessing-game",)):
-        for name in batch:
-            workflow = workflows[name]
-            print(f"Validating {name} with the Automation service...")
-            api.request(f"{app_url}/workflows/{name}/validate{app_query}", "POST", {
-                "properties": {
-                    "definition": workflow["definition"], "kind": workflow["kind"],
-                    "parameters": {
-                        key: parameters[key] for key in workflow["definition"]["parameters"]
-                    },
-                },
-            }, AUTOMATION_SCOPE)
-        print(f"Publishing Automation workflows: {', '.join(batch)}...")
-        publish_workflow_artifacts(api, f"{app_url}/deployWorkflowArtifacts{app_query}", {
-            **{f"{name}/workflow.json": workflows[name] for name in batch},
-            "parameters.json": parameters,
-        })
-        for name in batch:
-            callback_url = wait_for_workflow(api, app_url, app_query, name, workflows[name])
-    return callback_url
+    print("Validating guessing-game with the Automation service...")
+    api.request(f"{app_url}/workflows/guessing-game/validate{app_query}", "POST", {
+        "properties": {
+            "definition": workflow["definition"], "kind": workflow["kind"],
+            "parameters": {
+                key: parameters[key] for key in workflow["definition"]["parameters"]
+            },
+        },
+    }, AUTOMATION_SCOPE)
+    print("Publishing the shared-conversation Automation workflow...")
+    publish_workflow_artifacts(api, f"{app_url}/deployWorkflowArtifacts{app_query}", {
+        "guessing-game/workflow.json": workflow,
+        "parameters.json": parameters,
+    })
+    return wait_for_workflow(api, app_url, app_query, "guessing-game", workflow)
 
 
 def wait_for_workflow(api, app_url, app_query, name, workflow):
@@ -430,7 +386,7 @@ def main():
     if phase in {"automation", "all"}:
         callback_url = publish_automation(api)
         save_outputs({"LOGIC_APPS_WORKFLOW_URL": callback_url})
-        print("Automation workflow and Foundry project connection configured.")
+        print("Automation workflow and managed-identity Foundry access configured.")
         print("The signed workflow callback is saved only in ignored azd state.")
 
 

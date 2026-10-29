@@ -3,6 +3,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError, URLError
@@ -14,7 +15,7 @@ class RunnerTests(unittest.TestCase):
     def setUp(self):
         self.url = "https://example.test/workflows/game/invoke?sig=private-signature"
         self.result = {
-            "conversation_id": "run-123",
+            "conversation_id": "conv-123",
             "number_picked": 42,
             "status": "won",
             "turns": 6,
@@ -49,12 +50,16 @@ class RunnerTests(unittest.TestCase):
                 )
                 self.assertEqual(run_workflow.validate_result(result), result)
 
+    def test_accepts_conversation_trace_and_agent_metadata(self):
+        result = dict(
+            self.result, game_run_id="run-123", trace_id="trace-123",
+            agent_versions={"player": "5", "game_master": "19"},
+        )
+        self.assertEqual(run_workflow.validate_result(result), result)
+
     def test_rejects_invalid_results(self):
         invalid = [
-            None,
-            [],
-            {},
-            dict(self.result, status="unknown"),
+            None, [], {}, dict(self.result, status="unknown"),
             dict(self.result, number_picked=-1),
             dict(self.result, number_picked=0),
             dict(self.result, number_picked=101),
@@ -105,8 +110,7 @@ class RunnerTests(unittest.TestCase):
     def test_transport_errors_do_not_expose_callback_signature(self, urlopen):
         errors = [
             HTTPError(self.url, 502, "private-signature", {}, None),
-            URLError(self.url),
-            TimeoutError(self.url),
+            URLError(self.url), TimeoutError(self.url),
         ]
         for error in errors:
             with self.subTest(error=type(error).__name__):
@@ -135,16 +139,8 @@ class WorkflowContractTests(unittest.TestCase):
         cls.workflow = json.loads(Path(__file__).with_name("workflow.json").read_text())
         cls.definition = cls.workflow["definition"]
         cls.actions = cls.definition["actions"]
-        cls.game = cls.actions["Finalize_game"]["actions"]
         cls.loop = cls.actions["Play_up_to_ten_turns"]
         cls.turn = cls.loop["actions"]
-        cls.decision = cls.turn["Check_win_or_turn_limit"]
-        cls.turn_limit = cls.decision["else"]["actions"]["Check_turn_limit"]
-        cls.continuation = cls.turn_limit["else"]["actions"]
-        cls.turn_workflows = {
-            name: json.loads(Path(__file__).with_name(name + ".json").read_text())
-            for name in ("player-turn", "game-master-turn")
-        }
 
     def test_stateful_http_workflow_has_bounded_loop(self):
         self.assertEqual(self.workflow["kind"], "Stateful")
@@ -153,200 +149,121 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertEqual(trigger["inputs"]["method"], "POST")
         self.assertEqual(self.loop["type"], "Until")
         self.assertEqual(self.loop["limit"], {"count": 10, "timeout": "PT5M"})
-        self.assertEqual(self.loop["operationOptions"], "FailWhenLimitsReached")
-        self.assertEqual(
-            self.loop["expression"],
-            "@or(variables('gameFailed'), not(equals(variables('lastMessage')['status'], 'playing')))",
-        )
+        self.assertNotIn("operationOptions", self.loop)
+        self.assertEqual(self.loop["runAfter"], {"Create_conversation": ["Succeeded"]})
+        self.assertIn("not(equals(body('Player')['status'], 'completed'))", self.loop["expression"])
+        self.assertIn("not(equals(body('Game_master')['status'], 'completed'))", self.loop["expression"])
+        self.assertIn("['status'], 'playing'))", self.loop["expression"])
 
-    def test_turn_is_player_then_master_then_counter_then_decision_without_wrapper_scopes(self):
-        self.assertEqual(list(self.turn), [
-            "Player", "Game_master", "Count_turn", "Check_win_or_turn_limit", "Mark_failed_turn",
-        ])
-        self.assertEqual(self.turn["Player"]["runAfter"], {})
+    def test_only_two_agents_run_inside_loop_and_no_memory_scaffolding_remains(self):
+        self.assertEqual(list(self.turn), ["Player", "Game_master"])
+        self.assertNotIn("runAfter", self.turn["Player"])
         self.assertEqual(self.turn["Game_master"]["runAfter"], {"Player": ["Succeeded"]})
-        self.assertEqual(self.turn["Count_turn"]["runAfter"], {"Game_master": ["Succeeded"]})
-        self.assertEqual(self.turn["Count_turn"]["type"], "IncrementVariable")
-        self.assertEqual(self.turn["Count_turn"]["inputs"], {"name": "turnCount", "value": 1})
-        self.assertEqual(self.decision["runAfter"], {"Count_turn": ["Succeeded"]})
+        self.assertEqual(set(self.actions), {
+            "Create_conversation", "Play_up_to_ten_turns", "Game_result", "Record_session",
+            "Respond_with_result", "Respond_with_error", "Fail_run",
+        })
+        encoded = json.dumps(self.definition)
+        for removed in ("Remember_", "Read_", "Filter_", "variables(", "Turn_result", '"type": "Workflow"'):
+            self.assertNotIn(removed, encoded)
 
-    def test_win_is_checked_before_the_tenth_turn_loss(self):
-        self.assertEqual(self.decision["type"], "If")
-        self.assertEqual(self.decision["expression"], "@equals(body('Game_master')['status'], 'won')")
-        self.assertEqual(set(self.decision["actions"]), {"Game_won_message"})
-        self.assertEqual(self.decision["actions"]["Game_won_message"]["inputs"], {
-            "name": "lastMessage",
-            "value": {"status": "won", "number": "@body('Game_master')['number']"},
-        })
-        self.assertEqual(self.turn_limit["type"], "If")
-        self.assertEqual(
-            self.turn_limit["expression"], "@greaterOrEquals(variables('turnCount'), 10)",
-        )
-        self.assertEqual(self.turn_limit["actions"]["Game_lost_message"]["inputs"], {
-            "name": "lastMessage", "value": {"status": "lost", "number": "-1"},
-        })
-
-    def test_only_the_continue_branch_remembers_the_turn_before_repeating_player(self):
-        self.assertEqual(set(self.continuation), {"Remember_guess", "Remember_hint"})
-        self.assertEqual(self.continuation["Remember_guess"]["inputs"], {
-            "name": "playerMessages",
-            "value": {"role": "assistant", "content": "@string(body('Player'))"},
-        })
-        self.assertEqual(self.continuation["Remember_guess"]["runAfter"], {})
-        self.assertEqual(self.continuation["Remember_hint"]["inputs"], {
-            "name": "playerMessages",
-            "value": {"role": "user", "content": "@body('Game_master')['hint']"},
-        })
-        self.assertEqual(self.continuation["Remember_hint"]["runAfter"], {
-            "Remember_guess": ["Succeeded"],
-        })
-        self.assertNotIn("lastMessage", json.dumps(self.continuation))
-        self.assertNotIn("Terminate", json.dumps(self.turn))
-
-    def test_each_variable_is_initialized_once_at_top_level(self):
-        variables = []
-        for action in self.actions.values():
-            if action["type"] == "InitializeVariable":
-                self.assertEqual(len(action["inputs"]["variables"]), 1)
-                variables.extend(action["inputs"]["variables"])
-        self.assertEqual(len(variables), 5)
-        self.assertEqual({value["name"] for value in variables}, {
-            "number", "lastMessage", "turnCount", "playerMessages", "gameFailed",
-        })
-        number = next(value for value in variables if value["name"] == "number")
-        self.assertEqual(number["value"], "@rand(1, 101)")
-        message = next(value for value in variables if value["name"] == "lastMessage")
-        self.assertEqual(message["value"], {"status": "playing"})
-        self.assertEqual(set(self.loop["runAfter"]), {
-            name for name, action in self.actions.items() if action["type"] == "InitializeVariable"
-        })
-
-    def test_native_foundry_agents_use_the_project_connection_and_keep_roles_isolated(self):
-        self.assertNotIn("gatewayRuntimeKey", self.definition["parameters"])
-        self.assertNotIn("modelBaseUrl", self.definition["parameters"])
-        self.assertNotIn('"type": "Agent"', json.dumps(self.definition))
-        for name, agent, child, version in (
-            ("Player", "player", "player-turn", "playerAgentVersion"),
-            ("Game_master", "gameMaster", "game-master-turn", "gameMasterAgentVersion"),
+    def test_both_version_pinned_agents_reuse_exactly_one_conversation(self):
+        create = self.actions["Create_conversation"]["inputs"]
+        self.assertEqual(create["uri"],
+                         "@concat(parameters('foundryProjectEndpoint'), '/openai/v1/conversations')")
+        self.assertEqual(create["body"]["items"][0]["role"], "user")
+        self.assertIn("player moves first", create["body"]["items"][0]["content"])
+        for name, agent, parameter in (
+            ("Player", "player", "playerAgentVersion"),
+            ("Game_master", "gameMaster", "gameMasterAgentVersion"),
         ):
-            invocation = self.turn[name]
-            self.assertEqual(invocation["type"], "Workflow")
-            self.assertEqual(invocation["inputs"]["host"]["workflow"]["id"], child)
-            self.assertEqual(invocation["inputs"]["retryPolicy"]["type"], "none")
-            definition = self.turn_workflows[child]["definition"]
-            action = definition["actions"]["Foundry_agent"]
+            action = self.turn[name]
             inputs = action["inputs"]
-            self.assertEqual(action["type"], "Agent")
-            self.assertEqual(inputs["agentModelType"], "FoundryAgentServiceV2")
-            self.assertEqual(inputs["modelConfigurations"], {
-                "model1": {"referenceName": "foundry-project"},
+            self.assertEqual(action["type"], "Http")
+            self.assertEqual(inputs["method"], "POST")
+            self.assertEqual(inputs["uri"],
+                             "@concat(parameters('foundryProjectEndpoint'), '/openai/v1/responses')")
+            self.assertEqual(inputs["body"]["conversation"], "@body('Create_conversation')['id']")
+            self.assertEqual(inputs["body"]["agent_reference"], {
+                "type": "agent_reference", "name": agent,
+                "version": f"@parameters('{parameter}')",
             })
-            self.assertEqual(inputs["parameters"]["foundryAgentId"], agent)
-            self.assertEqual(inputs["parameters"]["foundryVersionName"], f"@parameters('{version}')")
-            self.assertEqual(action["limit"], {"count": 3, "timeout": "PT1M"})
-            self.assertEqual(action["operationOptions"], "FailWhenLimitsReached")
-            self.assertEqual(set(action["runtimeConfiguration"]["secureData"]["properties"]), {"inputs", "outputs"})
-            self.assertEqual(inputs["retryPolicy"]["type"], "none")
-            self.assertNotIn("headers", inputs)
-        player = self.turn["Player"]
-        self.assertEqual(player["inputs"]["body"], {"messages": "@string(variables('playerMessages'))"})
-        child = self.turn_workflows["player-turn"]["definition"]
-        self.assertEqual(child["actions"]["Foundry_agent"]["inputs"]["parameters"]["messages"], [
-            {"role": "User", "content": "@triggerBody()['messages']"},
-        ])
-        schema = child["triggers"]["When_an_HTTP_request_is_received"]["inputs"]["schema"]
-        self.assertEqual(set(schema["properties"]), {"messages"})
+            self.assertNotIn("text", inputs["body"])
+        self.assertNotIn("number_picked", json.dumps(self.turn))
+        self.assertIn("latest player guess", self.turn["Game_master"]["inputs"]["body"]["input"])
+
+    def test_foundry_uses_managed_identity_no_retries_and_shared_trace(self):
+        for action in (self.actions["Create_conversation"], *self.turn.values()):
+            inputs = action["inputs"]
+            self.assertEqual(inputs["authentication"], {
+                "type": "ManagedServiceIdentity", "audience": "https://ai.azure.com",
+            })
+            self.assertEqual(inputs["retryPolicy"], {"type": "none"})
+        for action in self.turn.values():
+            self.assertEqual(action["runtimeConfiguration"]["secureData"], {
+                "properties": ["inputs", "outputs"],
+            })
+            self.assertIn("body('Create_conversation')['metadata']['trace_id']",
+                          action["inputs"]["headers"]["traceparent"])
+            self.assertEqual(action["inputs"]["body"]["metadata"]["turn"],
+                             "@string(add(iterationIndexes('Play_up_to_ten_turns'), 1))")
+
+    def test_final_result_parses_last_reply_and_validates_completion_before_recording(self):
+        result = self.actions["Game_result"]
+        self.assertEqual(result["type"], "ParseJson")
+        self.assertEqual(result["runAfter"], {"Play_up_to_ten_turns": ["Succeeded"]})
+        content = result["inputs"]["content"]
+        self.assertEqual(content["status"],
+                         "@json(last(last(body('Game_master')['output'])['content'])['text'])['status']")
+        self.assertEqual(content["turns"], "@int(body('Game_master')['metadata']['turn'])")
+        self.assertEqual(content["conversation_id"], "@body('Create_conversation')['id']")
+        self.assertIn("equals(body('Player')['status'], 'completed')", content["valid"])
+        self.assertIn("equals(body('Game_master')['status'], 'completed')", content["valid"])
+        self.assertIn("body('Player')['conversation']['id']", content["valid"])
+        self.assertIn("body('Game_master')['conversation']['id']", content["valid"])
+        schema = result["inputs"]["schema"]
         self.assertFalse(schema["additionalProperties"])
-        for name in ("Initialize_player_messages",):
-            self.assertNotIn("variables('number')", json.dumps(self.actions[name]))
-        for name in ("Remember_guess", "Remember_hint"):
-            self.assertNotIn("variables('number')", json.dumps(self.continuation[name]))
-        self.assertNotIn("variables('number')", json.dumps(player["inputs"]))
-        self.assertIn("variables('number')", json.dumps(self.turn["Game_master"]["inputs"]["body"]))
-        self.assertEqual(self.turn["Game_master"]["inputs"]["body"]["guess"], "@body('Player')['guess']")
+        self.assertEqual(set(schema["required"]), set(content))
+        self.assertEqual(schema["properties"]["valid"], {"type": "boolean", "enum": [True]})
+        self.assertEqual(schema["properties"]["number_picked"],
+                         {"type": "integer", "minimum": 1, "maximum": 100})
+        self.assertIn("'won', 'lost'", schema["properties"]["status"]["enum"])
+        self.assertIn("'lost'), createArray(10), range(1, 10)", schema["properties"]["turns"]["enum"])
 
-    def test_guesses_and_hints_are_validated_before_the_turn_completes(self):
-        player = self.turn_workflows["player-turn"]["definition"]["actions"]
-        master = self.turn_workflows["game-master-turn"]["definition"]["actions"]
-        schema = player["Parse_player_guess"]["inputs"]["schema"]["properties"]["guess"]
-        self.assertEqual(schema, {"type": "integer", "minimum": 1, "maximum": 100})
-        hint = master["Validate_master_hint"]["inputs"]["schema"]["properties"]["hint"]
-        self.assertEqual(master["Validate_master_hint"]["runtimeConfiguration"]["secureData"], {
-            "properties": ["inputs"],
-        })
-        self.assertEqual(
-            hint["enum"],
-            "@createArray(if(equals(triggerBody()['guess'], triggerBody()['number']), 'correct', if(less(triggerBody()['guess'], triggerBody()['number']), 'higher', 'lower')))",
-        )
-        for actions, validation in ((player, "Parse_player_guess"), (master, "Validate_master_hint")):
-            self.assertEqual(
-                actions[validation]["inputs"]["content"], "@outputs('Foundry_agent')['lastAssistantMessage']",
-            )
-            self.assertEqual(actions[validation]["runAfter"], {"Foundry_agent": ["Succeeded"]})
-            self.assertEqual(actions["Return_agent_response"]["runAfter"], {validation: ["Succeeded"]})
-            self.assertEqual(
-                actions["Respond_with_error"]["runAfter"],
-                {validation: ["Failed", "Skipped", "TimedOut"]},
-            )
-            self.assertEqual(actions["Respond_with_error"]["inputs"]["statusCode"], 502)
-            self.assertEqual(actions["Fail_run"]["inputs"]["runStatus"], "Failed")
-        self.assertEqual(player["Return_agent_response"]["inputs"]["body"], "@body('Parse_player_guess')")
-        self.assertEqual(master["Return_agent_response"]["inputs"]["body"], {
-            "status": "@if(equals(body('Validate_master_hint')['hint'], 'correct'), 'won', 'playing')",
-            "hint": "@body('Validate_master_hint')['hint']",
-            "number": "@if(equals(body('Validate_master_hint')['hint'], 'correct'), triggerBody()['number'], -1)",
-        })
-
-    def test_result_uses_real_number_and_recording_precedes_success_response(self):
-        self.assertEqual(self.actions["Finalize_game"]["runAfter"], {
-            "Play_up_to_ten_turns": ["Succeeded"],
-        })
-        result = self.game["Game_result"]
-        self.assertEqual(result["runAfter"], {"Validate_game_completion": ["Succeeded"]})
-        self.assertEqual(result["inputs"]["number_picked"], "@variables('number')")
-        self.assertEqual(result["inputs"]["status"], "@variables('lastMessage')['status']")
-        record = self.game["Record_session"]
+    def test_records_actual_conversation_once_before_success_response(self):
+        record = self.actions["Record_session"]
         self.assertEqual(record["runAfter"], {"Game_result": ["Succeeded"]})
-        self.assertEqual(record["inputs"]["body"], "@outputs('Game_result')")
-        self.assertEqual(record["inputs"]["retryPolicy"]["type"], "none")
+        self.assertEqual(record["inputs"]["body"], {
+            name: f"@body('Game_result')['{name}']"
+            for name in ("conversation_id", "number_picked", "status")
+        })
+        self.assertEqual(record["inputs"]["retryPolicy"], {"type": "none"})
         response = self.actions["Respond_with_result"]
-        self.assertEqual(response["runAfter"], {"Finalize_game": ["Succeeded"]})
-        self.assertEqual(response["inputs"]["body"]["session"], "@body('Record_session')")
-        self.assertEqual(response["inputs"]["body"]["message"], "@variables('lastMessage')")
-        self.assertEqual(self.actions["End_conversation"]["runAfter"], {
-            "Respond_with_result": ["Succeeded"],
+        self.assertEqual(response["runAfter"], {"Record_session": ["Succeeded"]})
+        body = response["inputs"]["body"]
+        self.assertEqual(body["session"], "@body('Record_session')")
+        self.assertEqual(body["turns"], "@body('Game_result')['turns']")
+        self.assertEqual(body["message"], {
+            "status": "@body('Game_result')['status']",
+            "number": "@if(equals(body('Game_result')['status'], 'won'), body('Game_result')['number_picked'], '-1')",
         })
-        self.assertEqual(self.actions["End_conversation"]["inputs"]["runStatus"], "Succeeded")
         self.assertEqual(self.actions["Respond_with_error"]["inputs"]["statusCode"], 502)
-        self.assertEqual(self.actions["Respond_with_error"]["runAfter"], {
-            "Finalize_game": ["Failed", "Skipped", "TimedOut"],
-        })
+        self.assertEqual(self.actions["Respond_with_error"]["runAfter"],
+                         {"Record_session": ["Failed", "Skipped", "TimedOut"]})
         self.assertEqual(self.actions["Fail_run"]["inputs"]["runStatus"], "Failed")
 
-    def test_failed_turn_stops_loop_and_cannot_be_recorded_as_a_game(self):
-        catch = self.loop["actions"]["Mark_failed_turn"]
-        self.assertEqual(catch["runAfter"], {
-            "Check_win_or_turn_limit": ["Failed", "Skipped", "TimedOut"],
-        })
-        self.assertEqual(catch["inputs"], {"name": "gameFailed", "value": True})
-        self.assertIn("variables('gameFailed')", self.loop["expression"])
-        completion = self.game["Validate_game_completion"]
-        self.assertEqual(completion["inputs"]["content"]["failed"], "@variables('gameFailed')")
-        self.assertEqual(completion["inputs"]["schema"]["properties"]["failed"]["enum"], [False])
-        self.assertEqual(completion["inputs"]["schema"]["properties"]["status"]["enum"], ["won", "lost"])
-
-    def test_action_dependencies_resolve(self):
-        def check(actions):
+    def test_all_action_and_parameter_references_resolve_without_unused_parameters(self):
+        all_actions = {**self.actions, **self.turn}
+        for actions in (self.actions, self.turn):
             for action in actions.values():
                 for dependency in action.get("runAfter", {}):
                     self.assertIn(dependency, actions)
-                if "actions" in action:
-                    check(action["actions"])
-                if "else" in action:
-                    check(action["else"]["actions"])
-        check(self.actions)
-        for workflow in self.turn_workflows.values():
-            check(workflow["definition"]["actions"])
+        encoded = json.dumps(self.definition)
+        references = re.findall(r"(?:body|outputs|actions|iterationIndexes)\('([^']+)'\)", encoded)
+        self.assertTrue(set(references) <= set(all_actions))
+        parameters = set(re.findall(r"parameters\('([^']+)'\)", encoded))
+        self.assertEqual(parameters, set(self.definition["parameters"]))
+        self.assertEqual(len(all_actions), 9)
 
 
 if __name__ == "__main__":

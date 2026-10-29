@@ -5,7 +5,7 @@ from unittest.mock import Mock, patch
 from urllib.error import HTTPError
 
 from deploy_automation import (
-    ARM, FOUNDRY_USER_ROLE, ROOT, AzureRequestError, configure_foundry_connection, configure_gateway,
+    ARM, FOUNDRY_USER_ROLE, ROOT, AzureRequestError, configure_gateway,
     ensure_foundry_access, main, publish_automation, publish_workflow_artifacts,
     request_json, runtime_endpoints, tracker_openapi, wait_for_workflow,
 )
@@ -21,46 +21,40 @@ class GatewayContractTests(unittest.TestCase):
             (app, {}),
             ({}, {}),
             ({}, {}),
-            ({}, {}),
-            ({}, {}),
-            ({}, {}),
         ]
         environment = {
             "AUTOMATION_LOCATION": "westus",
             "AUTOMATION_PROJECT_NAME": "test-project",
             "AUTOMATION_PROJECT_RESOURCE_ID": "/automationProjects/test-project",
-            "MODEL_DEPLOYMENT": "gpt-4.1",
+            "PROJECT_ENDPOINT": "https://foundry.example/api/projects/demo/",
             "PLAYER_AGENT_VERSION": "2",
             "GAME_MASTER_AGENT_VERSION": "3",
             "GAME_TRACKER_API_URL": "https://tracker.example",
         }
         with patch.dict("os.environ", environment), patch(
                 "deploy_automation.ensure_foundry_access") as access, patch(
-                "deploy_automation.configure_foundry_connection") as connection, patch(
                 "deploy_automation.wait_for_workflow", return_value="https://workflow.example/invoke?sig=test") as ready:
             publish_automation(api)
         access.assert_called_once_with(api, app)
-        connection.assert_called_once()
-        self.assertEqual([call.args[3] for call in ready.call_args_list], [
-            "player-turn", "game-master-turn", "guessing-game",
-        ])
-        children = api.request.call_args_list[5].args[2]["files"]
-        files = api.request.call_args_list[7].args[2]["files"]
-        self.assertEqual(set(children), {
-            "player-turn/workflow.json", "game-master-turn/workflow.json", "parameters.json",
-        })
-        self.assertEqual(children["parameters.json"], files["parameters.json"])
-        for index in (3, 4, 6):
-            validation = api.request.call_args_list[index].args[2]["properties"]
-            self.assertEqual(set(validation["parameters"]), set(validation["definition"]["parameters"]))
-            for key, binding in validation["parameters"].items():
-                self.assertEqual(binding, files["parameters.json"][key])
+        ready.assert_called_once()
+        self.assertEqual(ready.call_args.args[3], "guessing-game")
+        self.assertEqual(api.request.call_count, 5)
+        files = api.request.call_args_list[4].args[2]["files"]
+        self.assertEqual(set(files), {"guessing-game/workflow.json", "parameters.json"})
+        validation = api.request.call_args_list[3].args[2]["properties"]
+        self.assertEqual(set(validation["parameters"]), set(validation["definition"]["parameters"]))
+        for key, binding in validation["parameters"].items():
+            self.assertEqual(binding, files["parameters.json"][key])
+        self.assertEqual(files["parameters.json"]["foundryProjectEndpoint"]["value"],
+                         "https://foundry.example/api/projects/demo")
         self.assertEqual(files["parameters.json"]["playerAgentVersion"], {
             "type": "String", "value": "2",
         })
         self.assertEqual(files["parameters.json"]["gameMasterAgentVersion"]["value"], "3")
         self.assertNotIn("gatewayRuntimeKey", files["parameters.json"])
+        self.assertNotIn("modelName", files["parameters.json"])
         self.assertNotIn("appsetting(", json.dumps(files))
+        self.assertNotIn('"type": "Workflow"', json.dumps(files))
 
     @patch("deploy_automation.time.sleep")
     def test_waits_for_the_expected_definition_not_just_a_healthy_old_workflow(self, sleep):
@@ -79,43 +73,6 @@ class GatewayContractTests(unittest.TestCase):
         sleep.assert_called_once_with(5)
         self.assertIn("/triggers/When_an_HTTP_request_is_received/listCallbackUrl",
                       api.request.call_args.args[0])
-
-    def test_creates_a_managed_identity_foundry_connection_and_preserves_other_connections(self):
-        api = Mock()
-        api.request.return_value = ({"managedApiConnections": {"keep": {"id": "existing"}}}, {})
-        environment = {
-            "PROJECT_ENDPOINT": "https://foundry.example/api/projects/demo",
-            "FOUNDRY_PROJECT_RESOURCE_ID": "/account/projects/demo",
-        }
-        with patch.dict("os.environ", environment), patch(
-                "deploy_automation.publish_workflow_artifacts") as publish:
-            configure_foundry_connection(api, "https://automation.example/app", "?api-version=test")
-        files = publish.call_args.args[2]
-        self.assertEqual(files["connections.json"]["managedApiConnections"], {"keep": {"id": "existing"}})
-        connection = files["connections.json"]["agentConnections"]["foundry-project"]
-        self.assertEqual(connection["endpoint"], environment["PROJECT_ENDPOINT"])
-        self.assertEqual(connection["resourceId"], environment["FOUNDRY_PROJECT_RESOURCE_ID"])
-        self.assertEqual(connection["authentication"], {"type": "ManagedServiceIdentity"})
-        self.assertEqual(connection["type"], "FoundryAgentService")
-
-        api.request.return_value = (files["connections.json"], {})
-        with patch.dict("os.environ", environment), patch(
-                "deploy_automation.publish_workflow_artifacts") as publish:
-            configure_foundry_connection(api, "https://automation.example/app", "?api-version=test")
-        publish.assert_not_called()
-
-        connection["resourceId"] = "/another-project"
-        with patch.dict("os.environ", environment), patch(
-                "deploy_automation.publish_workflow_artifacts") as publish:
-            with self.assertRaisesRegex(RuntimeError, "different project"):
-                configure_foundry_connection(api, "https://automation.example/app", "?api-version=test")
-        publish.assert_not_called()
-
-    def test_connection_read_errors_are_not_replaced_with_an_empty_configuration(self):
-        api = Mock()
-        api.request.side_effect = AzureRequestError(403, "Forbidden")
-        with self.assertRaises(AzureRequestError):
-            configure_foundry_connection(api, "https://automation.example/app", "?api-version=test")
 
     def test_foundry_access_is_scoped_to_the_actual_application_identity_and_project(self):
         api = Mock()

@@ -3,9 +3,10 @@
     "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
     "contentVersion": "1.0.0.0",
     "parameters": {
-      "gameTrackerApiUrl": {
-        "type": "String"
-      }
+      "foundryProjectEndpoint": {"type": "String"},
+      "playerAgentVersion": {"type": "String"},
+      "gameMasterAgentVersion": {"type": "String"},
+      "gameTrackerApiUrl": {"type": "String"}
     },
     "triggers": {
       "When_an_HTTP_request_is_received": {
@@ -13,333 +14,144 @@
         "kind": "Http",
         "inputs": {
           "method": "POST",
-          "schema": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {}
-          }
+          "schema": {"type": "object", "additionalProperties": false, "properties": {}}
         }
       }
     },
     "actions": {
-      "Initialize_number": {
-        "type": "InitializeVariable",
+      "Create_conversation": {
+        "type": "Http",
         "inputs": {
-          "variables": [
-            {
-              "name": "number",
-              "type": "Integer",
-              "value": "@rand(1, 101)"
+          "uri": "@concat(parameters('foundryProjectEndpoint'), '/openai/v1/conversations')",
+          "method": "POST",
+          "headers": {"Content-Type": "application/json"},
+          "authentication": {"type": "ManagedServiceIdentity", "audience": "https://ai.azure.com"},
+          "retryPolicy": {"type": "none"},
+          "body": {
+            "items": [{
+              "type": "message",
+              "role": "user",
+              "content": "Start a new guess-my-number game between player and gameMaster. The player moves first."
+            }],
+            "metadata": {
+              "game_run_id": "@workflow()['run']['name']",
+              "participants": "player,gameMaster",
+              "trace_id": "@replace(guid(), '-', '')",
+              "parent_span_id": "@substring(replace(guid(), '-', ''), 0, 16)"
             }
-          ]
-        },
-        "runAfter": {}
-      },
-      "Initialize_turn_count": {
-        "type": "InitializeVariable",
-        "inputs": {
-          "variables": [
-            {
-              "name": "turnCount",
-              "type": "Integer",
-              "value": 0
-            }
-          ]
-        },
-        "runAfter": {}
-      },
-      "Initialize_last_message": {
-        "type": "InitializeVariable",
-        "inputs": {
-          "variables": [
-            {
-              "name": "lastMessage",
-              "type": "Object",
-              "value": {
-                "status": "playing"
-              }
-            }
-          ]
-        },
-        "runAfter": {}
-      },
-      "Initialize_player_messages": {
-        "type": "InitializeVariable",
-        "inputs": {
-          "variables": [
-            {
-              "name": "playerMessages",
-              "type": "Array",
-              "value": [
-                {
-                  "role": "system",
-                  "content": "You are the player in a guess-my-number game. The game master chose an integer between 1 and 100 inclusive. You have at most 10 guesses. Use the higher/lower feedback and previous guesses to narrow the range. Reply only with a JSON object containing an integer guess, for example {\"guess\": 50}. Never switch roles."
-                },
-                {
-                  "role": "user",
-                  "content": "The game has started. Make your first guess."
-                }
-              ]
-            }
-          ]
-        },
-        "runAfter": {}
-      },
-      "Initialize_failure_flag": {
-        "type": "InitializeVariable",
-        "inputs": {
-          "variables": [
-            {
-              "name": "gameFailed",
-              "type": "Boolean",
-              "value": false
-            }
-          ]
-        },
-        "runAfter": {}
+          }
+        }
       },
       "Play_up_to_ten_turns": {
         "type": "Until",
-        "expression": "@or(variables('gameFailed'), not(equals(variables('lastMessage')['status'], 'playing')))",
-        "limit": {
-          "count": 10,
-          "timeout": "PT5M"
-        },
-        "operationOptions": "FailWhenLimitsReached",
-        "runAfter": {
-          "Initialize_number": [
-            "Succeeded"
-          ],
-          "Initialize_turn_count": [
-            "Succeeded"
-          ],
-          "Initialize_last_message": [
-            "Succeeded"
-          ],
-          "Initialize_player_messages": [
-            "Succeeded"
-          ],
-          "Initialize_failure_flag": [
-            "Succeeded"
-          ]
-        },
+        "runAfter": {"Create_conversation": ["Succeeded"]},
+        "limit": {"count": 10, "timeout": "PT5M"},
+        "expression": "@or(not(equals(body('Player')['status'], 'completed')), not(equals(body('Game_master')['status'], 'completed')), not(equals(json(last(last(body('Game_master')['output'])['content'])['text'])['status'], 'playing')))",
         "actions": {
           "Player": {
-            "type": "Workflow",
+            "type": "Http",
             "inputs": {
-              "host": {
-                "workflow": {
-                  "id": "player-turn"
-                },
-                "triggerName": "When_an_HTTP_request_is_received"
+              "uri": "@concat(parameters('foundryProjectEndpoint'), '/openai/v1/responses')",
+              "method": "POST",
+              "headers": {
+                "Content-Type": "application/json",
+                "traceparent": "@concat('00-', body('Create_conversation')['metadata']['trace_id'], '-', body('Create_conversation')['metadata']['parent_span_id'], '-01')"
               },
+              "authentication": {"type": "ManagedServiceIdentity", "audience": "https://ai.azure.com"},
+              "retryPolicy": {"type": "none"},
               "body": {
-                "messages": "@string(variables('playerMessages'))"
-              },
-              "retryPolicy": {
-                "type": "none"
+                "conversation": "@body('Create_conversation')['id']",
+                "metadata": {
+                  "game_run_id": "@workflow()['run']['name']",
+                  "turn": "@string(add(iterationIndexes('Play_up_to_ten_turns'), 1))"
+                },
+                "agent_reference": {
+                  "type": "agent_reference",
+                  "name": "player",
+                  "version": "@parameters('playerAgentVersion')"
+                },
+                "input": "@concat('Player: make exactly one guess for turn ', string(add(iterationIndexes('Play_up_to_ten_turns'), 1)), ' of 10, using the game master feedback in this conversation.')"
               }
             },
-            "runtimeConfiguration": {
-              "secureData": {
-                "properties": ["inputs", "outputs"]
-              }
-            },
-            "runAfter": {}
+            "runtimeConfiguration": {"secureData": {"properties": ["inputs", "outputs"]}}
           },
           "Game_master": {
-            "type": "Workflow",
+            "type": "Http",
             "inputs": {
-              "host": {
-                "workflow": {
-                  "id": "game-master-turn"
-                },
-                "triggerName": "When_an_HTTP_request_is_received"
+              "uri": "@concat(parameters('foundryProjectEndpoint'), '/openai/v1/responses')",
+              "method": "POST",
+              "headers": {
+                "Content-Type": "application/json",
+                "traceparent": "@concat('00-', body('Create_conversation')['metadata']['trace_id'], '-', body('Create_conversation')['metadata']['parent_span_id'], '-01')"
               },
+              "authentication": {"type": "ManagedServiceIdentity", "audience": "https://ai.azure.com"},
+              "retryPolicy": {"type": "none"},
               "body": {
-                "number": "@variables('number')",
-                "guess": "@body('Player')['guess']"
-              },
-              "retryPolicy": {
-                "type": "none"
-              }
-            },
-            "runtimeConfiguration": {
-              "secureData": {
-                "properties": ["inputs", "outputs"]
-              }
-            },
-            "runAfter": {
-              "Player": ["Succeeded"]
-            }
-          },
-          "Count_turn": {
-            "type": "IncrementVariable",
-            "inputs": {
-              "name": "turnCount",
-              "value": 1
-            },
-            "runAfter": {
-              "Game_master": ["Succeeded"]
-            }
-          },
-          "Check_win_or_turn_limit": {
-            "type": "If",
-            "expression": "@equals(body('Game_master')['status'], 'won')",
-            "runAfter": {
-              "Count_turn": ["Succeeded"]
-            },
-            "actions": {
-              "Game_won_message": {
-                "type": "SetVariable",
-                "inputs": {
-                  "name": "lastMessage",
-                  "value": {
-                    "status": "won",
-                    "number": "@body('Game_master')['number']"
-                  }
+                "conversation": "@body('Create_conversation')['id']",
+                "metadata": {
+                  "game_run_id": "@workflow()['run']['name']",
+                  "turn": "@string(add(iterationIndexes('Play_up_to_ten_turns'), 1))"
                 },
-                "runAfter": {}
+                "agent_reference": {
+                  "type": "agent_reference",
+                  "name": "gameMaster",
+                  "version": "@parameters('gameMasterAgentVersion')"
+                },
+                "input": "@concat('Game master: assess the latest player guess once and give your feedback. This is turn ', string(add(iterationIndexes('Play_up_to_ten_turns'), 1)), ' of 10.')"
               }
             },
-            "else": {
-              "actions": {
-                "Check_turn_limit": {
-                  "type": "If",
-                  "expression": "@greaterOrEquals(variables('turnCount'), 10)",
-                  "runAfter": {},
-                  "actions": {
-                    "Game_lost_message": {
-                      "type": "SetVariable",
-                      "inputs": {
-                        "name": "lastMessage",
-                        "value": {
-                          "status": "lost",
-                          "number": "-1"
-                        }
-                      },
-                      "runAfter": {}
-                    }
-                  },
-                  "else": {
-                    "actions": {
-                      "Remember_guess": {
-                        "type": "AppendToArrayVariable",
-                        "inputs": {
-                          "name": "playerMessages",
-                          "value": {
-                            "role": "assistant",
-                            "content": "@string(body('Player'))"
-                          }
-                        },
-                        "runAfter": {}
-                      },
-                      "Remember_hint": {
-                        "type": "AppendToArrayVariable",
-                        "inputs": {
-                          "name": "playerMessages",
-                          "value": {
-                            "role": "user",
-                            "content": "@body('Game_master')['hint']"
-                          }
-                        },
-                        "runAfter": {
-                          "Remember_guess": ["Succeeded"]
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "Mark_failed_turn": {
-            "type": "SetVariable",
-            "inputs": {
-              "name": "gameFailed",
-              "value": true
-            },
-            "runAfter": {
-              "Check_win_or_turn_limit": ["Failed", "Skipped", "TimedOut"]
-            }
+            "runAfter": {"Player": ["Succeeded"]},
+            "runtimeConfiguration": {"secureData": {"properties": ["inputs", "outputs"]}}
           }
         }
       },
-      "Finalize_game": {
-        "type": "Scope",
-        "runAfter": {
-          "Play_up_to_ten_turns": ["Succeeded"]
-        },
-        "actions": {
-          "Validate_game_completion": {
-            "type": "ParseJson",
-            "inputs": {
-              "content": {
-                "failed": "@variables('gameFailed')",
-                "turns": "@variables('turnCount')",
-                "status": "@variables('lastMessage')['status']"
-              },
-              "schema": {
-                "type": "object",
-                "required": [
-                  "failed",
-                  "turns",
-                  "status"
-                ],
-                "properties": {
-                  "failed": {
-                    "type": "boolean",
-                    "enum": [
-                      false
-                    ]
-                  },
-                  "status": {
-                    "type": "string",
-                    "enum": ["won", "lost"]
-                  },
-                  "turns": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 10
-                  }
-                }
-              }
-            },
-            "runAfter": {}
+      "Game_result": {
+        "type": "ParseJson",
+        "inputs": {
+          "content": {
+            "status": "@json(last(last(body('Game_master')['output'])['content'])['text'])['status']",
+            "number_picked": "@json(last(last(body('Game_master')['output'])['content'])['text'])['number_picked']",
+            "conversation_id": "@body('Create_conversation')['id']",
+            "turns": "@int(body('Game_master')['metadata']['turn'])",
+            "valid": "@and(equals(body('Player')['status'], 'completed'), equals(body('Game_master')['status'], 'completed'), equals(body('Player')['conversation']['id'], body('Create_conversation')['id']), equals(body('Game_master')['conversation']['id'], body('Create_conversation')['id']), equals(json(last(last(body('Game_master')['output'])['content'])['text'])['guess'], json(last(last(body('Player')['output'])['content'])['text'])['guess']), equals(json(last(last(body('Game_master')['output'])['content'])['text'])['hint'], if(equals(json(last(last(body('Player')['output'])['content'])['text'])['guess'], json(last(last(body('Game_master')['output'])['content'])['text'])['number_picked']), 'correct', if(less(json(last(last(body('Player')['output'])['content'])['text'])['guess'], json(last(last(body('Game_master')['output'])['content'])['text'])['number_picked']), 'higher', 'lower'))))"
           },
-          "Game_result": {
-            "type": "Compose",
-            "inputs": {
-              "conversation_id": "@workflow()['run']['name']",
-              "number_picked": "@variables('number')",
-              "status": "@variables('lastMessage')['status']"
-            },
-            "runAfter": {
-              "Validate_game_completion": [
-                "Succeeded"
-              ]
-            }
-          },
-          "Record_session": {
-            "type": "Http",
-            "inputs": {
-              "uri": "@concat(parameters('gameTrackerApiUrl'), '/sessions')",
-              "method": "POST",
-              "headers": {
-                "Content-Type": "application/json"
+          "schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["status", "number_picked", "conversation_id", "turns", "valid"],
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": "@createArray(if(equals(json(last(last(body('Player')['output'])['content'])['text'])['guess'], json(last(last(body('Game_master')['output'])['content'])['text'])['number_picked']), 'won', 'lost'))"
               },
-              "body": "@outputs('Game_result')",
-              "retryPolicy": {
-                "type": "none"
-              }
-            },
-            "runAfter": {
-              "Game_result": [
-                "Succeeded"
-              ]
+              "number_picked": {"type": "integer", "minimum": 1, "maximum": 100},
+              "conversation_id": {"type": "string", "minLength": 1},
+              "turns": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10,
+                "enum": "@if(equals(json(last(last(body('Game_master')['output'])['content'])['text'])['status'], 'lost'), createArray(10), range(1, 10))"
+              },
+              "valid": {"type": "boolean", "enum": [true]}
             }
           }
-        }
+        },
+        "runAfter": {"Play_up_to_ten_turns": ["Succeeded"]}
+      },
+      "Record_session": {
+        "type": "Http",
+        "inputs": {
+          "uri": "@concat(parameters('gameTrackerApiUrl'), '/sessions')",
+          "method": "POST",
+          "headers": {"Content-Type": "application/json"},
+          "body": {
+            "conversation_id": "@body('Game_result')['conversation_id']",
+            "number_picked": "@body('Game_result')['number_picked']",
+            "status": "@body('Game_result')['status']"
+          },
+          "retryPolicy": {"type": "none"}
+        },
+        "runAfter": {"Game_result": ["Succeeded"]}
       },
       "Respond_with_result": {
         "type": "Response",
@@ -347,28 +159,24 @@
         "inputs": {
           "statusCode": 200,
           "body": {
-            "conversation_id": "@outputs('Game_result')['conversation_id']",
-            "number_picked": "@outputs('Game_result')['number_picked']",
-            "status": "@outputs('Game_result')['status']",
-            "turns": "@variables('turnCount')",
-            "message": "@variables('lastMessage')",
-            "session": "@body('Record_session')"
+            "status": "@body('Game_result')['status']",
+            "number_picked": "@body('Game_result')['number_picked']",
+            "conversation_id": "@body('Game_result')['conversation_id']",
+            "turns": "@body('Game_result')['turns']",
+            "message": {
+              "status": "@body('Game_result')['status']",
+              "number": "@if(equals(body('Game_result')['status'], 'won'), body('Game_result')['number_picked'], '-1')"
+            },
+            "session": "@body('Record_session')",
+            "game_run_id": "@workflow()['run']['name']",
+            "trace_id": "@body('Create_conversation')['metadata']['trace_id']",
+            "agent_versions": {
+              "player": "@parameters('playerAgentVersion')",
+              "game_master": "@parameters('gameMasterAgentVersion')"
+            }
           }
         },
-        "runAfter": {
-          "Finalize_game": [
-            "Succeeded"
-          ]
-        }
-      },
-      "End_conversation": {
-        "type": "Terminate",
-        "inputs": {
-          "runStatus": "Succeeded"
-        },
-        "runAfter": {
-          "Respond_with_result": ["Succeeded"]
-        }
+        "runAfter": {"Record_session": ["Succeeded"]}
       },
       "Respond_with_error": {
         "type": "Response",
@@ -377,36 +185,20 @@
           "statusCode": 502,
           "body": {
             "error": "Game execution or session recording failed. Review the Automation run history.",
-            "conversation_id": "@workflow()['run']['name']"
+            "game_run_id": "@workflow()['run']['name']"
           }
         },
-        "runAfter": {
-          "Finalize_game": [
-            "Failed",
-            "Skipped",
-            "TimedOut"
-          ]
-        }
+        "runAfter": {"Record_session": ["Failed", "Skipped", "TimedOut"]}
       },
       "Fail_run": {
         "type": "Terminate",
         "inputs": {
           "runStatus": "Failed",
-          "runError": {
-            "code": "GameFailed",
-            "message": "Game execution or session recording failed."
-          }
+          "runError": {"code": "GameFailed", "message": "Game execution or session recording failed."}
         },
-        "runAfter": {
-          "Respond_with_error": [
-            "Succeeded",
-            "Failed",
-            "TimedOut"
-          ]
-        }
+        "runAfter": {"Respond_with_error": ["Succeeded", "Failed", "TimedOut"]}
       }
-    },
-    "outputs": {}
+    }
   },
   "kind": "Stateful"
 }

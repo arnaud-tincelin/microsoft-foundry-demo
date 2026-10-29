@@ -98,9 +98,33 @@ class HostedDeploymentTests(unittest.TestCase):
         with patch("deploy_agents.AIProjectClient", return_value=client), contextlib.redirect_stdout(io.StringIO()):
             deploy_agents.create_managed_agents()
         save.assert_called_once_with({"PLAYER_AGENT_VERSION": "2", "GAME_MASTER_AGENT_VERSION": "3"})
-        instructions = client.agents.create_version.call_args.kwargs["definition"].instructions
-        self.assertIn("Automation turn mode takes precedence", instructions)
-        self.assertIn("Otherwise, for an interactive game", instructions)
+        definitions = {
+            call.kwargs["agent_name"]: call.kwargs["definition"].as_dict()
+            for call in client.agents.create_version.call_args_list
+        }
+        for definition in definitions.values():
+            instructions = definition["instructions"].lower()
+            for removed in ("automation", "workflow", "legacy", "history array", "private state"):
+                self.assertNotIn(removed, instructions)
+            self.assertTrue(definition["text"]["format"]["strict"])
+            self.assertEqual(definition["text"]["format"]["type"], "json_schema")
+        player = definitions["player"]
+        self.assertIn("binary search", player["instructions"])
+        self.assertEqual(player["text"]["format"]["schema"], {
+            "type": "object", "additionalProperties": False, "required": ["guess"],
+            "properties": {"guess": {"type": "integer", "minimum": 1, "maximum": 100}},
+        })
+        master = definitions["gameMaster"]
+        self.assertIn("including a correct tenth guess", master["instructions"])
+        self.assertIn("Every earlier hint is binding", master["instructions"])
+        schema = master["text"]["format"]["schema"]
+        self.assertEqual(set(schema["required"]), {"status", "number_picked", "guess", "hint", "message"})
+        self.assertFalse(schema["additionalProperties"])
+        self.assertEqual(schema["properties"]["status"]["enum"], ["playing", "won", "lost"])
+        self.assertEqual(schema["properties"]["number_picked"]["type"], ["integer", "null"])
+        self.assertEqual(schema["properties"]["number_picked"]["minimum"], 1)
+        self.assertEqual(schema["properties"]["number_picked"]["maximum"], 100)
+        self.assertIn("Null while playing", schema["properties"]["number_picked"]["description"])
 
 
 if __name__ == "__main__":

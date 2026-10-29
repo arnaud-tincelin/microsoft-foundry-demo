@@ -26,7 +26,7 @@ load_outputs
 echo "Deploying the Foundry prompt and MCP agents..."
 uv run --frozen deploy_agents.py managed
 load_outputs
-echo "Connecting Logic Apps Automation to the Foundry project..."
+echo "Publishing the shared-conversation Logic Apps Automation workflow..."
 uv run --frozen deploy_automation.py automation
 load_outputs
 echo "Verifying a completed and recorded Automation game..."

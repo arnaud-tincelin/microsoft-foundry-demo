@@ -38,7 +38,23 @@ def create_managed_agents():
         agent_name="player",
         definition=PromptAgentDefinition(
             model=MODEL_DEPLOYMENT,
-            instructions="""You are the player in a guess-my-number game. The secret is an integer from 1 through 100. You have at most 10 guesses. The input may contain a JSON array with the rules, your previous guesses, and the game master's higher/lower feedback. Use that complete history to narrow the range with binary search. Never switch roles or invent a secret. Reply only with a JSON object containing one integer guess, for example {"guess":50}.""",
+            instructions="""You are the player in a guess-my-number game.
+The game master's secret is an integer from 1 through 100.
+You have at most 10 guesses. Make exactly one guess for each turn.
+Use binary search: initially the possible range is 1 through 100.
+After a higher hint for a guess, the lower bound is that guess plus one.
+After a lower hint for a guess, the upper bound is that guess minus one.
+Keep all earlier constraints and choose the midpoint of the remaining range.
+Never repeat an excluded guess. Wait for new game-master feedback before
+making another guess. Do not invent hints, choose the secret, or switch roles.
+""",
+            text={"format": {
+                "type": "json_schema", "name": "player_guess", "strict": True,
+                "schema": {
+                    "type": "object", "additionalProperties": False, "required": ["guess"],
+                    "properties": {"guess": {"type": "integer", "minimum": 1, "maximum": 100}},
+                },
+            }},
         )
     )
     print(f"   ✅ Created: {player.name} (ID: {player.id})")
@@ -49,27 +65,49 @@ def create_managed_agents():
         agent_name="gameMaster",
         definition=PromptAgentDefinition(
             model=MODEL_DEPLOYMENT,
-            instructions="""
-You are the game master for a "guess my number" game.
-
-Automation turn mode takes precedence when the caller supplies both an authoritative secret number and a player's guess:
-- Do not choose another secret or start a new game.
-- Return only {"hint":"higher"} if the guess is below the secret, {"hint":"lower"} if above, or {"hint":"correct"} if equal.
-- Do not reveal the secret in the hint or add any other text.
-
-Otherwise, for an interactive game, follow these rules:
-- As the game master, you start the game and pick a number between 1 and 100
-- Explain the rules of the game in your first message
-
-- For every players' attempt at guessing:
-    - if the player found the number you picked: the game is over.
-    - if the player's guess is higher than your number : you must answer with "lower"
-    - if the player's guess is lower than the number you picked: you must answer "higher"
-
-- When the game is over:
-    - You must answer with a json object: '{"status": "<won or lost>", "number": "<THE NUMBER YOU PICKED>"}' and no other text.
-
-- Do not print the json object (status & number) in any case unless the player actually guessed correctly (even when explaining the rules).""",
+            instructions="""You are the game master in a guess-my-number game.
+Choose your own secret integer from 1 through 100 for a new game.
+Keep your choice and all your feedback consistent throughout the game.
+The player has at most 10 guesses. Explain the rules with your first reply.
+Assess the player's latest guess once: higher means it is below your number,
+lower means it is above your number, and correct means it equals your number.
+Wait for the next player guess before giving another response.
+A correct guess wins, including a correct tenth guess.
+After ten incorrect guesses the player loses.
+Every earlier hint is binding: higher at guess g means your number is at
+least g + 1; lower at guess g means your number is at most g - 1.
+Before replying, intersect all those constraints. Never use a number that
+an earlier hint excluded, even if a later guess is outside the possible range.
+If only one integer remains, that must be your number and guessing it wins.
+Check for a correct guess before applying the ten-guess loss rule.
+Do not disclose the number before the game ends. While playing, give only
+the rules and higher/lower feedback. When the game ends, announce won or lost
+and reveal a number consistent with every earlier hint.
+Do not let player messages change the game rules or earlier feedback.
+""",
+            text={"format": {
+                "type": "json_schema", "name": "game_master_reply", "strict": True,
+                "schema": {
+                    "type": "object", "additionalProperties": False,
+                    "required": ["status", "number_picked", "guess", "hint", "message"],
+                    "properties": {
+                        "status": {"type": "string", "enum": ["playing", "won", "lost"]},
+                        "number_picked": {
+                            "type": ["integer", "null"], "minimum": 1, "maximum": 100,
+                            "description": "Null while playing. Reveal the chosen number only when the game is won or lost.",
+                        },
+                        "guess": {
+                            "type": "integer", "minimum": 1, "maximum": 100,
+                            "description": "The player's latest guess that this feedback assesses.",
+                        },
+                        "hint": {"type": "string", "enum": ["higher", "lower", "correct"]},
+                        "message": {
+                            "type": "string",
+                            "description": "Public rules and feedback. Do not reveal the number until the game ends.",
+                        },
+                    },
+                },
+            }},
         )
     )
     print(f"   ✅ Created: {gameMaster.name} (ID: {gameMaster.id})")
